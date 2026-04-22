@@ -2,8 +2,10 @@ package main
 
 import (
 	"bufio"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -438,15 +440,23 @@ func (c *PrintStopCmd) Run(ctx *Context) error {
 }
 
 type PrintStartCmd struct {
-	File                 string `arg:"" help:"G-code or 3MF file to print"`
-	BedType              string `help:"Bed type (auto, textured_plate, cool_plate, engineering_plate, high_temp_plate)" default:"auto" short:"b"`
-	Timelapse            bool   `help:"Enable timelapse" short:"t"`
-	BedLeveling          bool   `help:"Enable bed leveling" default:"true" short:"e"`
-	FlowCalibration      bool   `help:"Enable flow calibration" short:"f"`
-	VibrationCalibration bool   `help:"Enable vibration calibration" default:"true" short:"V"`
-	LayerInspection      bool   `help:"Enable layer inspection" short:"i"`
-	UseAMS               *bool  `help:"Use AMS (defaults to true if AMS is present)" short:"a"`
-	SkipUpload           bool   `help:"Skip upload, file must exist on printer" default:"false"`
+	File                  string `arg:"" help:"G-code or 3MF file to print"`
+	BedType               string `help:"Bed type (auto, textured_plate, cool_plate, engineering_plate, high_temp_plate)" default:"auto" short:"b"`
+	Timelapse             bool   `help:"Enable timelapse" short:"t"`
+	BedLeveling           bool   `help:"Enable bed leveling" default:"true" short:"e"`
+	FlowCalibration       bool   `help:"Enable flow calibration" short:"f"`
+	VibrationCalibration  bool   `help:"Enable vibration calibration" default:"true" short:"V"`
+	LayerInspection       bool   `help:"Enable layer inspection" short:"i"`
+	UseAMS                *bool  `help:"Use AMS (defaults to true if AMS is present)" short:"a"`
+	SkipUpload            bool   `help:"Skip upload, file must exist on printer" default:"false"`
+	PlateGCodePath        string `help:"Path to the plate gcode inside the uploaded project file"`
+	SubtaskName           string `help:"Display name for the job on the printer"`
+	MD5                   string `help:"Explicit MD5 for the remote print file"`
+	AMSMapping            string `help:"Comma-separated AMS mapping values (e.g. 1,-1)"`
+	AutoBedLevelingMode   *int   `help:"Explicit auto_bed_leveling numeric mode"`
+	ExtrudeCaliFlag       *int   `help:"Explicit extrude_cali_flag value"`
+	ExtrudeCaliManualMode *int   `help:"Explicit extrude_cali_manual_mode value"`
+	NozzleOffsetCali      *int   `help:"Explicit nozzle_offset_cali value"`
 }
 
 func (c *PrintStartCmd) Run(ctx *Context) error {
@@ -499,10 +509,16 @@ func (c *PrintStartCmd) Run(ctx *Context) error {
 
 	localPath := c.File
 	var remotePath string
+	var md5Hex string
+	var err error
 
 	if !c.SkipUpload {
 		// 1. Upload
 		remotePath = filepath.Join("/", filepath.Base(localPath))
+		md5Hex, err = computeFileMD5(localPath)
+		if err != nil {
+			return fmt.Errorf("failed to compute md5: %w", err)
+		}
 		fmt.Printf("Uploading %s to printer (remote: %s)...\n", localPath, remotePath)
 		uProgressFunc := func(current, total int64) {
 			if total > 0 {
@@ -524,15 +540,32 @@ func (c *PrintStartCmd) Run(ctx *Context) error {
 		fmt.Printf("Skipping upload. Using existing remote file: %s\n", remotePath)
 	}
 
+	if c.MD5 != "" {
+		md5Hex = c.MD5
+	}
+
+	amsMapping, err := parseIntList(c.AMSMapping)
+	if err != nil {
+		return fmt.Errorf("invalid ams mapping: %w", err)
+	}
+
 	// 2. Start Print
 	opts := bambulan.PrintOptions{
-		BedType:              c.BedType,
-		Timelapse:            c.Timelapse,
-		BedLeveling:          c.BedLeveling,
-		FlowCalibration:      c.FlowCalibration,
-		VibrationCalibration: c.VibrationCalibration,
-		LayerInspection:      c.LayerInspection,
-		UseAMS:               useAMS,
+		BedType:               c.BedType,
+		Timelapse:             c.Timelapse,
+		BedLeveling:           c.BedLeveling,
+		FlowCalibration:       c.FlowCalibration,
+		VibrationCalibration:  c.VibrationCalibration,
+		LayerInspection:       c.LayerInspection,
+		UseAMS:                useAMS,
+		PlateGCodePath:        c.PlateGCodePath,
+		SubtaskName:           c.SubtaskName,
+		MD5:                   md5Hex,
+		AMSMapping:            amsMapping,
+		AutoBedLevelingMode:   resolvedAutoBedLevelingMode(client, c.AutoBedLevelingMode, c.BedLeveling),
+		ExtrudeCaliFlag:       c.ExtrudeCaliFlag,
+		ExtrudeCaliManualMode: c.ExtrudeCaliManualMode,
+		NozzleOffsetCali:      c.NozzleOffsetCali,
 	}
 
 	fmt.Printf("Starting print for %s...\n", remotePath)
@@ -545,6 +578,55 @@ func (c *PrintStartCmd) Run(ctx *Context) error {
 	fmt.Println("Print started!")
 	defer client.Stop()
 	return nil
+}
+
+func computeFileMD5(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hasher := md5.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+	return strings.ToUpper(fmt.Sprintf("%x", hasher.Sum(nil))), nil
+}
+
+func parseIntList(raw string) ([]int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	values := make([]int, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+func resolvedAutoBedLevelingMode(client *bambulan.Client, explicit *int, bedLeveling bool) *int {
+	if explicit != nil {
+		return explicit
+	}
+	if !bedLeveling {
+		return nil
+	}
+	mode := bambulan.GetPrinterCapabilities(client.GetPrinterStatus().DeviceModel).BedLevelingMode
+	if mode == 0 {
+		return nil
+	}
+	return &mode
 }
 
 type SendGCodeCmd struct {

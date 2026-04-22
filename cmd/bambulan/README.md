@@ -156,6 +156,14 @@ Uploads a file and starts printing.
 - `--vibration-calibration` (`-V`): Enable vibration calibration (default: true)
 - `--layer-inspection` (`-i`): Enable layer inspection (default: false)
 - `--use-ams` (`-a`): Use AMS (default: false)
+- `--plate-gcode-path` <string>: Explicit path to the selected plate gcode inside the uploaded project.
+- `--subtask-name` <string>: Explicit display name for the job on the printer.
+- `--md5` <hex>: Explicit MD5 for the uploaded remote file. When uploading locally, the CLI computes this automatically.
+- `--ams-mapping` <csv>: Explicit comma-separated AMS mapping values such as `1,-1`.
+- `--auto-bed-leveling-mode` <int>: Explicit numeric `auto_bed_leveling` mode.
+- `--extrude-cali-flag` <int>: Explicit `extrude_cali_flag` value.
+- `--extrude-cali-manual-mode` <int>: Explicit `extrude_cali_manual_mode` value.
+- `--nozzle-offset-cali` <int>: Explicit `nozzle_offset_cali` value.
 - `--skip-upload`: Skip upload and use the provided path as an existing file on the printer.
 
 #### Camera

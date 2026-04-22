@@ -46,6 +46,9 @@ type PrinterCapability struct {
 
 	// HasBedLeveling indicates whether the printer supports automatic bed leveling.
 	HasBedLeveling bool `json:"has_bed_leveling"`
+
+	// BedLevelingMode captures the printer's numeric auto-bed-leveling mode when known.
+	BedLevelingMode int `json:"bed_leveling_mode"`
 }
 
 // GetPrinterCapabilities returns the capabilities for the given printer model ID (e.g., "BL-P001", "C11").

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -268,33 +269,107 @@ func (m *MQTTClient) SendGCode(gcode string) (string, error) {
 //	}
 //	seqID, err := client.MQTT.StartPrint("my-model.gcode.3mf", opts)
 func (m *MQTTClient) StartPrint(filename string, opts PrintOptions) (string, error) {
-	param := "Metadata/plate_1.gcode"
-	if strings.HasSuffix(strings.ToLower(filename), ".gcode") {
-		param = filename
-	}
-
 	seqID := m.getNextSequenceID()
-	cmd := map[string]any{
-		"print": map[string]any{
-			"sequence_id":    seqID,
-			"command":        "project_file",
-			"param":          param,
-			"subtask_name":   filename,
-			"url":            fmt.Sprintf("ftp://%s", filename),
-			"bed_type":       opts.BedType,
-			"timelapse":      opts.Timelapse,
-			"bed_leveling":   opts.BedLeveling,
-			"flow_cali":      opts.FlowCalibration,
-			"vibration_cali": opts.VibrationCalibration,
-			"layer_inspect":  opts.LayerInspection,
-			"use_ams":        opts.UseAMS,
-			"profile_id":     "0",
-			"project_id":     "0",
-			"subtask_id":     "0",
-			"task_id":        "0",
-		},
-	}
+	cmd := buildStartPrintCommand(seqID, filename, opts)
 	return seqID, m.Publish(cmd)
+}
+
+func buildStartPrintCommand(seqID string, filename string, opts PrintOptions) map[string]any {
+	remoteFile := normalizeRemoteFilename(filename)
+	param := normalizePlateGCodePath(remoteFile, opts.PlateGCodePath)
+	subtaskName := normalizeSubtaskName(remoteFile, opts.SubtaskName)
+	amsMapping2 := opts.AMSMapping2
+	if len(amsMapping2) == 0 && len(opts.AMSMapping) > 0 {
+		amsMapping2 = deriveAMSSlotMappings(opts.AMSMapping)
+	}
+	printCmd := map[string]any{
+		"sequence_id":    seqID,
+		"command":        "project_file",
+		"param":          param,
+		"file":           remoteFile,
+		"subtask_name":   subtaskName,
+		"url":            fmt.Sprintf("ftp:///%s", remoteFile),
+		"bed_type":       opts.BedType,
+		"timelapse":      opts.Timelapse,
+		"bed_leveling":   opts.BedLeveling,
+		"flow_cali":      opts.FlowCalibration,
+		"vibration_cali": opts.VibrationCalibration,
+		"layer_inspect":  opts.LayerInspection,
+		"use_ams":        opts.UseAMS,
+		"profile_id":     "0",
+		"project_id":     "0",
+		"subtask_id":     "0",
+		"task_id":        "0",
+		"cfg":            "0",
+	}
+	if opts.MD5 != "" {
+		printCmd["md5"] = opts.MD5
+	}
+	if len(opts.AMSMapping) > 0 {
+		printCmd["ams_mapping"] = opts.AMSMapping
+	}
+	if len(amsMapping2) > 0 {
+		printCmd["ams_mapping2"] = amsMapping2
+	}
+	if opts.AutoBedLevelingMode != nil {
+		printCmd["auto_bed_leveling"] = *opts.AutoBedLevelingMode
+	}
+	if opts.ExtrudeCaliFlag != nil {
+		printCmd["extrude_cali_flag"] = *opts.ExtrudeCaliFlag
+	}
+	if opts.ExtrudeCaliManualMode != nil {
+		printCmd["extrude_cali_manual_mode"] = *opts.ExtrudeCaliManualMode
+	}
+	if opts.NozzleOffsetCali != nil {
+		printCmd["nozzle_offset_cali"] = *opts.NozzleOffsetCali
+	}
+	return map[string]any{"print": printCmd}
+}
+
+func normalizeRemoteFilename(filename string) string {
+	trimmed := strings.TrimSpace(filename)
+	if trimmed == "" {
+		return trimmed
+	}
+	return strings.TrimPrefix(trimmed, "/")
+}
+
+func normalizePlateGCodePath(remoteFile, explicit string) string {
+	explicit = strings.TrimSpace(explicit)
+	if explicit != "" {
+		return strings.TrimPrefix(explicit, "/")
+	}
+	lower := strings.ToLower(remoteFile)
+	if strings.HasSuffix(lower, ".gcode") && !strings.HasSuffix(lower, ".gcode.3mf") {
+		return remoteFile
+	}
+	return "Metadata/plate_1.gcode"
+}
+
+func normalizeSubtaskName(remoteFile, explicit string) string {
+	explicit = strings.TrimSpace(explicit)
+	if explicit != "" {
+		return explicit
+	}
+	base := path.Base(remoteFile)
+	for _, suffix := range []string{".gcode.3mf", ".3mf", ".gcode", ".gco"} {
+		if strings.HasSuffix(strings.ToLower(base), suffix) {
+			return base[:len(base)-len(suffix)]
+		}
+	}
+	return base
+}
+
+func deriveAMSSlotMappings(mapping []int) []AMSSlotMapping {
+	derived := make([]AMSSlotMapping, 0, len(mapping))
+	for _, value := range mapping {
+		if value < 0 {
+			derived = append(derived, AMSSlotMapping{AMSID: 255, SlotID: 255})
+			continue
+		}
+		derived = append(derived, AMSSlotMapping{AMSID: value / 4, SlotID: value % 4})
+	}
+	return derived
 }
 
 // SetChamberLight turns the chamber light on or off.

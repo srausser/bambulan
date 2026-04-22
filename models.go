@@ -396,13 +396,29 @@ func (p *PrinterStatus) GetPrintStageName() string {
 
 // PrintOptions configures the parameters for starting a print job.
 type PrintOptions struct {
-	BedType              string
-	Timelapse            bool
-	BedLeveling          bool
-	FlowCalibration      bool
-	VibrationCalibration bool
-	LayerInspection      bool
-	UseAMS               bool
+	BedType               string
+	Timelapse             bool
+	BedLeveling           bool
+	FlowCalibration       bool
+	VibrationCalibration  bool
+	LayerInspection       bool
+	UseAMS                bool
+	PlateGCodePath        string
+	SubtaskName           string
+	MD5                   string
+	AMSMapping            []int
+	AMSMapping2           []AMSSlotMapping
+	AutoBedLevelingMode   *int
+	ExtrudeCaliFlag       *int
+	ExtrudeCaliManualMode *int
+	NozzleOffsetCali      *int
+}
+
+// AMSSlotMapping identifies one selected AMS slot using the printer's
+// structured {ams_id, slot_id} format.
+type AMSSlotMapping struct {
+	AMSID  int `json:"ams_id"`
+	SlotID int `json:"slot_id"`
 }
 
 // Speed Profile Constants
