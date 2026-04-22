@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
 	"embed"
@@ -907,6 +908,7 @@ func (s *WebServer) handleAPIPrint(w http.ResponseWriter, r *http.Request) {
 
 	file, header, err := r.FormFile("file")
 	var remotePath string
+	var md5Hex string
 
 	if err == nil {
 		defer file.Close()
@@ -918,6 +920,20 @@ func (s *WebServer) handleAPIPrint(w http.ResponseWriter, r *http.Request) {
 		if seeker, ok := file.(io.Seeker); ok {
 			if _, err := seeker.Seek(0, io.SeekStart); err != nil {
 				slog.Error("Failed to reset file pointer", "error", err)
+				http.Error(w, "Internal processing error", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		hash := md5.New()
+		if _, err := io.Copy(hash, file); err != nil {
+			http.Error(w, "Failed to hash upload", http.StatusInternalServerError)
+			return
+		}
+		md5Hex = strings.ToUpper(hex.EncodeToString(hash.Sum(nil)))
+		if seeker, ok := file.(io.Seeker); ok {
+			if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+				slog.Error("Failed to reset file pointer after hashing", "error", err)
 				http.Error(w, "Internal processing error", http.StatusInternalServerError)
 				return
 			}
@@ -969,14 +985,44 @@ func (s *WebServer) handleAPIPrint(w http.ResponseWriter, r *http.Request) {
 		return v == "true" || v == "on" || v == "1"
 	}
 
+	parseIntField := func(v string) *int {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return nil
+		}
+		value, err := strconv.Atoi(v)
+		if err != nil {
+			return nil
+		}
+		return &value
+	}
+
+	formMD5 := strings.TrimSpace(r.FormValue("md5"))
+	if formMD5 != "" {
+		md5Hex = formMD5
+	}
+	amsMapping, err := parseIntList(r.FormValue("ams_mapping"))
+	if err != nil {
+		http.Error(w, "Invalid ams_mapping: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	opts := bambulan.PrintOptions{
-		BedType:              r.FormValue("bed_type"),
-		Timelapse:            parseBool(r.FormValue("timelapse")),
-		BedLeveling:          parseBool(r.FormValue("bed_leveling")),
-		FlowCalibration:      parseBool(r.FormValue("flow_calibration")),
-		VibrationCalibration: parseBool(r.FormValue("vibration_calibration")),
-		LayerInspection:      parseBool(r.FormValue("layer_inspection")),
-		UseAMS:               parseBool(r.FormValue("use_ams")),
+		BedType:               r.FormValue("bed_type"),
+		Timelapse:             parseBool(r.FormValue("timelapse")),
+		BedLeveling:           parseBool(r.FormValue("bed_leveling")),
+		FlowCalibration:       parseBool(r.FormValue("flow_calibration")),
+		VibrationCalibration:  parseBool(r.FormValue("vibration_calibration")),
+		LayerInspection:       parseBool(r.FormValue("layer_inspection")),
+		UseAMS:                parseBool(r.FormValue("use_ams")),
+		PlateGCodePath:        strings.TrimSpace(r.FormValue("plate_gcode_path")),
+		SubtaskName:           strings.TrimSpace(r.FormValue("subtask_name")),
+		MD5:                   md5Hex,
+		AMSMapping:            amsMapping,
+		AutoBedLevelingMode:   resolvedAutoBedLevelingMode(session.Client, parseIntField(r.FormValue("auto_bed_leveling_mode")), parseBool(r.FormValue("bed_leveling"))),
+		ExtrudeCaliFlag:       parseIntField(r.FormValue("extrude_cali_flag")),
+		ExtrudeCaliManualMode: parseIntField(r.FormValue("extrude_cali_manual_mode")),
+		NozzleOffsetCali:      parseIntField(r.FormValue("nozzle_offset_cali")),
 	}
 
 	// 3. Start Print

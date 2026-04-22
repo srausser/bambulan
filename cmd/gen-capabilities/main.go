@@ -40,6 +40,7 @@ type Capabilities struct {
 	HasAMSCapacityReporting bool   `json:"has_ams_capacity_reporting"`
 	HasTimelapse            bool   `json:"has_timelapse"`
 	HasBedLeveling          bool   `json:"has_bed_leveling"`
+	BedLevelingMode         int    `json:"bed_leveling_mode"`
 }
 
 func main() {
@@ -134,10 +135,16 @@ func main() {
 			case bool:
 				if v {
 					caps.HasBedLeveling = true
+					if caps.BedLevelingMode == 0 {
+						caps.BedLevelingMode = 1
+					}
 				}
 			case float64:
 				if v > 0 {
 					caps.HasBedLeveling = true
+					if int(v) > caps.BedLevelingMode {
+						caps.BedLevelingMode = int(v)
+					}
 				}
 			}
 		}
